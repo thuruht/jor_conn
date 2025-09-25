@@ -1,0 +1,3 @@
+#!/bin/bash
+# Quick status check
+/usr/local/bin/jor_conn status

@@ -1,0 +1,216 @@
+#!/bin/bash
+# Jor Connector ULTIMATE Edition (Refactored)
+# A portable and configurable networking solution.
+
+# --- Configuration and Library Loading ---
+# Load main config file first, as it defines variables needed by the library
+if [ -f "/etc/jor-conn/config.conf" ]; then
+    source "/etc/jor-conn/config.conf"
+else
+    # We can't use shared library colors here as it's not sourced yet
+    echo "CRITICAL: Configuration file /etc/jor-conn/config.conf not found."
+    exit 1
+fi
+
+# Source the shared library for functions and styles
+source /usr/local/lib/jor-conn/shared.sh
+
+# --- Function Definitions ---
+# Function to check for root privileges
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}Error: This command requires root privileges. Please run with sudo.${NC}"
+        log "Error: Command requires root privileges."
+        exit 1
+    fi
+}
+
+# Network connection function
+connect_network() {
+    local profile_name=$1
+    local profile_path="/etc/jor-conn/networks/$profile_name"
+
+    if [ ! -f "$profile_path" ]; then
+        echo -e "${RED}Error: Network profile '$profile_name' not found at $profile_path.${NC}"
+        log "Error: Network profile '$profile_name' not found."
+        exit 1
+    fi
+
+    show_banner
+    echo -e "${YELLOW}🔌 Connecting using profile '$profile_name'...${NC}"
+    log "Starting connection with profile: $profile_name"
+
+    # Source the network profile to get its variables
+    source "$profile_path"
+
+    # Stop any existing wpa_supplicant instance
+    progress_bar 1 1 "Stopping existing connections"
+    killall wpa_supplicant >/dev/null 2>&1 || true
+    sleep 1
+
+    # Create a temporary wpa_supplicant config file
+    local temp_wpa_config="/tmp/wpa_config_$$.conf"
+    echo -e "$(eval echo "$WPA_CONFIG_CONTENT")" > "$temp_wpa_config"
+
+    # Start the new connection
+    progress_bar 2 2 "Starting network '$profile_name'"
+    wpa_supplicant -B -i "$INTERFACE" -c "$temp_wpa_config"
+    sleep 3 # Give it time to associate
+    dhclient "$INTERFACE"
+    rm "$temp_wpa_config"
+
+    # Apply or remove proxy settings based on the profile
+    if [ "$APPLY_PROXY" = "true" ]; then
+        progress_bar 1 3 "Applying proxy settings"
+        tee /etc/environment > /dev/null << ENV_EOF
+http_proxy=${PROXY_SERVER}
+https_proxy=${PROXY_SERVER}
+ftp_proxy=${PROXY_SERVER}
+no_proxy="localhost,127.0.0.1,192.168.0.0/16"
+ENV_EOF
+        log "Proxy settings applied."
+    else
+        progress_bar 1 3 "Removing proxy settings"
+        tee /etc/environment > /dev/null << ENV_EOF
+http_proxy=""
+https_proxy=""
+ftp_proxy=""
+no_proxy="*"
+ENV_EOF
+        log "Proxy settings removed."
+    fi
+
+    # Sync time
+    progress_bar 1 4 "Syncing time"
+    ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+
+    show_easter_egg
+    echo -e "${GREEN}✅ Successfully connected using profile '$profile_name'!${NC}"
+    log "Connection successful for profile '$profile_name'."
+}
+
+# DuckDNS status check
+check_duckdns() {
+    echo -e "${BLUE}🔍 Checking DuckDNS status...${NC}"
+    local duckdns_ip=$(dig +short "$DUCKDNS_DOMAIN.duckdns.org" 2>/dev/null | head -1)
+    local wan_ip=$(curl -s ifconfig.me)
+
+    if [ -n "$duckdns_ip" ]; then
+        echo -e "🌍 DuckDNS IP: $duckdns_ip"
+        echo -e "📡 Your WAN IP: $wan_ip"
+        if [ "$duckdns_ip" = "$wan_ip" ]; then
+            echo -e "${GREEN}✅ DuckDNS is correctly pointing to your IP.${NC}"
+        else
+            echo -e "${YELLOW}⚠️ DuckDNS IP does not match your current WAN IP.${NC}"
+        fi
+    else
+        echo -e "${RED}❌ Could not resolve $DUCKDNS_DOMAIN.duckdns.org.${NC}"
+    fi
+}
+
+# --- Main Command Handler ---
+case "$1" in
+    "connect")
+        check_root
+        if [ -z "$2" ]; then
+            echo -e "${RED}Error: Please specify a network profile to connect to.${NC}"
+            echo -e "Usage: sudo jor_conn connect <profile_name>"
+            exit 1
+        fi
+        connect_network "$2"
+        ;;
+
+    "remote-vnc")
+        show_banner
+        echo -e "${YELLOW}🖥️  Initiating smart VNC connection...${NC}"
+        log "Starting VNC connection"
+
+        progress_bar 2 4 "Detecting server location"
+        check_duckdns
+        echo ""
+
+        if ping -c 1 -W 2 "$SERVER_LOCAL" >/dev/null 2>&1; then
+            echo -e "${GREEN}📍 Server found locally at $SERVER_LOCAL${NC}"
+            log "Connecting to VNC via local network"
+            vncviewer "$SERVER_LOCAL:5901"
+        else
+            echo -e "${BLUE}🌍 Connecting to VNC via DuckDNS: $SERVER_REMOTE${NC}"
+            log "Connecting to VNC via DuckDNS"
+            vncviewer "$SERVER_REMOTE:5901"
+        fi
+        ;;
+
+    "status")
+        show_banner
+        echo -e "${CYAN}📊 Ultimate System Status:${NC}"
+        echo ""
+        progress_bar 1 1 "Checking network interface"
+        echo -e "${YELLOW}🌐 Network Interface ($INTERFACE):${NC}"
+        iw dev "$INTERFACE" link 2>/dev/null || echo -e "  ${RED}Interface not connected${NC}"
+        echo ""
+        progress_bar 0.5 2 "Checking IP address"
+        echo -e "${YELLOW}📡 IP Address:${NC}"
+        ip addr show "$INTERFACE" 2>/dev/null | grep 'inet ' | head -1 | awk '{print "  " $2}' || echo -e "  ${RED}No IP assigned${NC}"
+        echo ""
+        progress_bar 0.5 3 "Checking proxy settings"
+        echo -e "${YELLOW}🔌 Proxy Settings:${NC}"
+        env | grep -i "proxy" | grep -v "no_proxy" || echo -e "  ${GREEN}No proxy settings active${NC}"
+        echo ""
+        progress_bar 1 4 "Checking server status"
+        echo -e "${YELLOW}🖥️  Server Status:${NC}"
+        if ping -c 1 -W 2 "$SERVER_LOCAL" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✅ Local server ($SERVER_LOCAL) is reachable${NC}"
+        else
+            echo -e "  ${YELLOW}⚠️ Local server ($SERVER_LOCAL) is unreachable${NC}"
+        fi
+        echo ""
+        check_duckdns
+        ;;
+
+    "edit-config")
+        check_root
+        echo "Opening /etc/jor-conn/config.conf with nano..."
+        nano /etc/jor-conn/config.conf
+        echo "Config file saved. Changes will apply on next use."
+        ;;
+
+    "log")
+        echo -e "${YELLOW}📋 Connection Log:${NC}"
+        tail -20 "$LOG_FILE" 2>/dev/null || echo "No log file found."
+        ;;
+
+    "help"|"--help"|"-h")
+        show_banner
+        echo -e "${YELLOW}📖 Jor Connector ULTIMATE (Refactored) Commands:${NC}"
+        echo ""
+        echo -e "${GREEN}Network Management:${NC}"
+        echo "  sudo jor_conn connect <profile> - Connect using a network profile from /etc/jor-conn/networks/"
+        echo ""
+        echo -e "${BLUE}Remote Access:${NC}"
+        echo "  jor_conn remote-vnc            - Smart VNC connection (local/remote auto-detect)"
+        echo ""
+        echo -e "${CYAN}Monitoring & Config:${NC}"
+        echo "  jor_conn status                 - Complete system and network status"
+        echo "  jor_conn log                    - View the last 20 log entries"
+        echo "  sudo jor_conn edit-config       - Edit the main configuration file"
+        echo ""
+        echo -e "${PURPLE}Advanced:${NC}"
+        echo "  jor-duckdns-update              - Manually update your DuckDNS IP"
+        echo "  jor-troubleshoot                - Launch advanced diagnostics script"
+        echo "  jor-magic                       - ✨ Display a random Easter egg"
+        echo ""
+        show_easter_egg
+        ;;
+
+    *)
+        show_banner
+        echo -e "${YELLOW}Usage: jor_conn {connect|remote-vnc|status|help}${NC}"
+        echo "For connecting, use: sudo jor_conn connect <profile_name>"
+        echo "For help, use: jor_conn help"
+        echo ""
+        show_easter_egg
+        ;;
+esac
+
+# Log command execution
+log "Command executed: jor_conn $*"

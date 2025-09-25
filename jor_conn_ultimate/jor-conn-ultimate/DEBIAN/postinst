@@ -1,0 +1,96 @@
+#!/bin/bash
+# Ultimate post-installation script
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo -e "${GREEN}"
+cat << 'ART'
+    ╔═╗╔═╗╦═╗    ╔═╗╔═╗╔╗╔╔═╗╔╦╗╔═╗╦ ╦╔╦╗
+    ║║║╠═╝╠╦╝    ║ ║╠═╣║║║╠═╣║║║║ ║║ ║║║║
+    ╚═╝╩  ╩╚═    ╚═╝╩ ╩╝╚╝╩ ╩╩ ╩╚═╝╚═╝╩ ╩
+ART
+echo -e "${NC}"
+
+echo -e "${YELLOW}🚀 Initializing Jor Connector ULTIMATE (Refactored)...${NC}"
+
+# Set executable permissions
+chmod +x /usr/local/bin/jor_conn
+chmod +x /usr/local/bin/jor-troubleshoot
+chmod +x /usr/local/bin/jor-duckdns-update
+chmod +x /usr/local/bin/jor-status
+chmod +x /usr/local/bin/jor-magic
+
+# Create default network profiles if they don't exist
+create_default_profiles() {
+    # Create network profiles directory if it doesn't exist
+    mkdir -p /etc/jor-conn/networks
+
+    if [ ! -f /etc/jor-conn/networks/noproxy ]; then
+        echo "Creating example 'noproxy' network profile..."
+        cat > /etc/jor-conn/networks/noproxy << 'NET_NOPROXY_EOF'
+# Network Profile: noproxy
+# Connects to a standard Wi-Fi network without a proxy.
+WPA_CONFIG_CONTENT="""
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+
+network={
+    ssid=\\"Jo\\"
+    psk=\\"69696969\\"
+}
+"""
+APPLY_PROXY="false"
+NET_NOPROXY_EOF
+    fi
+
+    if [ ! -f /etc/jor-conn/networks/proxy ]; then
+        echo "Creating example 'proxy' network profile..."
+        cat > /etc/jor-conn/networks/proxy << 'NET_PROXY_EOF'
+# Network Profile: proxy
+# Connects to a Wi-Fi network and applies proxy settings.
+WPA_CONFIG_CONTENT="""
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+
+network={
+    ssid=\\"DIRECT-TF-thuruht\\"
+    psk=\\"0thello6q\\"
+}
+"""
+APPLY_PROXY="true"
+NET_PROXY_EOF
+    fi
+}
+
+create_default_profiles
+
+# Create and set permissions for log file
+touch /var/log/jor-conn/jor-conn.log
+chmod 666 /var/log/jor-conn/jor-conn.log
+
+# Final instructions
+echo -e "${GREEN}"
+echo "████████████████████████████████████████████████████████████"
+echo "✅ JOR CONNECTOR ULTIMATE (REFACTORED) INSTALLED SUCCESSFULLY!"
+echo ""
+echo "✨ This version is now portable and configurable! ✨"
+echo "   - Main config: /etc/jor-conn/config.conf"
+echo "   - Network profiles: /etc/jor-conn/networks/"
+echo ""
+echo "🎯 Available commands:"
+echo "   jor_conn connect <profile> - Connect to a network"
+echo "   jor_conn remote-vnc      - Start smart VNC"
+echo "   jor_conn status          - View system status"
+echo "   jor_conn edit-config     - Edit main configuration"
+echo ""
+echo "🚀 Quick start:"
+echo "   sudo jor_conn connect proxy"
+echo "   jor_conn remote-vnc"
+echo "████████████████████████████████████████████████████████████"
+echo -e "${NC}"
+
+# Log installation
+echo "$(date): Jor Connector Ultimate (Refactored) installed" >> /var/log/jor-conn/jor-conn.log

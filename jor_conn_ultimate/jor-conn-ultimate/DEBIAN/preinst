@@ -1,0 +1,8 @@
+#!/bin/bash
+if [ "$(id -u)" -ne 0 ]; then
+  echo "This package must be installed with sudo or as root." >&2
+  exit 1
+fi
+echo "🎩 Preparing for Jor Connector ULTIMATE installation..."
+echo "This will install a portable and configurable network manager!"
+sleep 1

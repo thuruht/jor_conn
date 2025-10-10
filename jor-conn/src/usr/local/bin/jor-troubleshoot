@@ -1,0 +1,26 @@
+#!/bin/bash
+# Jor-Conn - Advanced Troubleshooting
+source /usr/local/lib/jor-conn/shared.sh
+source /etc/jor-conn/config.conf
+
+echo -e "${YELLOW}🔧 Jor-Conn Advanced Troubleshooting${NC}"
+echo "===================================="
+echo "1. Network Interface Check ($NETWORK_INTERFACE)..."
+ip link show "$NETWORK_INTERFACE"
+echo -e "\n2. WiFi Connection Status..."
+iw dev "$NETWORK_INTERFACE" link
+echo -e "\n3. IP Address Assignment..."
+ip addr show "$NETWORK_INTERFACE"
+echo -e "\n4. Routing Table..."
+ip route
+echo -e "\n5. DNS Resolution..."
+nslookup google.com
+echo -e "\n6. DuckDNS Check..."
+nslookup "$DUCKDNS_DOMAIN.duckdns.org"
+echo -e "\n7. VNC Port Check (Local)..."
+if nc -zv -w 2 "$VNC_SERVER_LOCAL" 5901; then
+    echo -e "${GREEN}Port 5901 is open on $VNC_SERVER_LOCAL${NC}"
+else
+    echo -e "${RED}Port 5901 is closed or unreachable on $VNC_SERVER_LOCAL${NC}"
+fi
+echo -e "\nTroubleshooting complete!"

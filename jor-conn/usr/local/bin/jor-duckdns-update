@@ -1,9 +1,13 @@
 #!/bin/bash
-# DuckDNS Manual Update Script for Jor-Conn
+# DuckDNS Manual Update Script
 source /usr/local/lib/jor-conn/shared.sh
 source /etc/jor-conn/config.conf
 
 echo "Updating DuckDNS for domain: $DUCKDNS_DOMAIN..."
+if [ -z "$DUCKDNS_TOKEN" ] || [ "$DUCKDNS_TOKEN" == "YOUR_DUCKDNS_TOKEN_HERE" ]; then
+    echo -e "${RED}Error: DuckDNS token not configured in /etc/jor-conn/config.conf${NC}"
+    exit 1
+fi
 response=$(curl -s "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&verbose=true")
 echo "DuckDNS Server Response: $response"
 log "Manual DuckDNS update triggered. Response: $response"

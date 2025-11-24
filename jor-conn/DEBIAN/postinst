@@ -1,0 +1,8 @@
+#!/bin/bash
+chmod +x /usr/local/bin/jor_conn
+chmod +x /usr/local/bin/jor-troubleshoot
+chmod +x /usr/local/bin/jor-duckdns-update
+chmod +x /usr/local/bin/jor-status
+chmod +x /usr/local/lib/jor-conn/shared.sh
+echo "✅ Jor Connector Installed!"
+echo "👉 Run 'sudo jor_conn edit-config' to set up your IPs."

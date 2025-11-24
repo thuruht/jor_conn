@@ -1,0 +1,44 @@
+#!/bin/bash
+# Advanced Troubleshooting Script
+source /usr/local/lib/jor-conn/shared.sh
+source /etc/jor-conn/config.conf
+
+echo -e "${YELLOW}🔧 Jor Connector Advanced Troubleshooting${NC}"
+echo "===================================="
+
+echo "1. Network Interface Check ($INTERFACE)..."
+ip link show "$INTERFACE"
+
+echo -e "\n2. WiFi Connection Status..."
+iw dev "$INTERFACE" link
+
+echo -e "\n3. IP Address Assignment..."
+ip addr show "$INTERFACE"
+
+echo -e "\n4. Routing Table..."
+ip route
+
+echo -e "\n5. DNS Resolution..."
+nslookup google.com
+
+echo -e "\n6. DuckDNS Check..."
+nslookup "$DUCKDNS_DOMAIN.duckdns.org"
+
+echo -e "\n7. VNC Port Check (Local)..."
+if command -v ncat >/dev/null; then
+    if ncat -zv -w 2 "$SERVER_LOCAL" 5901 2>/dev/null; then
+        echo -e "${GREEN}Port 5901 is open on $SERVER_LOCAL${NC}"
+    else
+        echo -e "${RED}Port 5901 is closed or unreachable on $SERVER_LOCAL${NC}"
+    fi
+elif command -v nc >/dev/null; then
+     if nc -zv -w 2 "$SERVER_LOCAL" 5901 2>/dev/null; then
+        echo -e "${GREEN}Port 5901 is open on $SERVER_LOCAL${NC}"
+    else
+        echo -e "${RED}Port 5901 is closed or unreachable on $SERVER_LOCAL${NC}"
+    fi
+else
+    echo "ncat/nc not found, skipping port check."
+fi
+
+echo -e "\nTroubleshooting complete!"

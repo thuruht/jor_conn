@@ -1,0 +1,7 @@
+WPA_CONFIG_CONTENT="""
+network={
+    ssid=\\"Jo\\"
+    psk=\\"69696969\\"
+}
+"""
+APPLY_PROXY="false"

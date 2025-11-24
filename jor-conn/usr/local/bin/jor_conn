@@ -1,0 +1,136 @@
+#!/bin/bash
+# Jor Connector Controller
+
+if [ -f "/etc/jor-conn/config.conf" ]; then
+    source "/etc/jor-conn/config.conf"
+else
+    echo "CRITICAL: /etc/jor-conn/config.conf not found."
+    exit 1
+fi
+
+source /usr/local/lib/jor-conn/shared.sh
+
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}Error: Run with sudo.${NC}"
+        exit 1
+    fi
+}
+
+connect_network() {
+    local profile_name=$1
+    local profile_path="/etc/jor-conn/networks/$profile_name"
+
+    if [ ! -f "$profile_path" ]; then
+        echo -e "${RED}Error: Profile '$profile_name' not found.${NC}"
+        exit 1
+    fi
+
+    show_banner
+    log "Connecting: $profile_name"
+    source "$profile_path"
+
+    progress_bar 1 "Stopping old connections"
+    killall wpa_supplicant >/dev/null 2>&1 || true
+    sleep 1
+
+    local temp_wpa="/tmp/wpa_config_$$.conf"
+    echo -e "$(eval echo "$WPA_CONFIG_CONTENT")" > "$temp_wpa"
+
+    progress_bar 2 "Starting $profile_name"
+    wpa_supplicant -B -i "$INTERFACE" -c "$temp_wpa"
+    sleep 3
+    dhclient "$INTERFACE"
+    rm "$temp_wpa"
+
+    if [ "$APPLY_PROXY" = "true" ]; then
+        enable_proxy_system
+    else
+        disable_proxy_system
+    fi
+
+    progress_bar 1 "Syncing time"
+    ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+    echo -e "${GREEN}✅ Connected!${NC}"
+}
+
+case "$1" in
+    "connect")
+        check_root
+        [ -z "$2" ] && echo "Usage: sudo jor_conn connect <profile>" && exit 1
+        connect_network "$2"
+        ;;
+    "proxy")
+        check_root
+        if [ "$2" == "on" ]; then show_banner; enable_proxy_system;
+        elif [ "$2" == "off" ]; then show_banner; disable_proxy_system;
+        else echo "Usage: sudo jor_conn proxy {on|off}"; fi
+        ;;
+    "remote-vnc")
+        show_banner
+        # Check if vncviewer exists (Client-side feature)
+        if ! command -v vncviewer &>/dev/null; then
+             echo -e "${YELLOW}⚠️  'vncviewer' is missing!${NC}"
+             echo -n "👉 Run 'apt install tigervnc-viewer' now? [y/N]: "
+             read -r INSTALL_VNC
+             if [[ "$INSTALL_VNC" =~ ^[Yy]$ ]]; then
+                 # Try to use apt if sudo is available, else warn
+                 if [ "$(id -u)" -eq 0 ]; then
+                    apt update && apt install -y tigervnc-viewer
+                 else
+                    sudo apt update && sudo apt install -y tigervnc-viewer
+                 fi
+             else
+                 echo "Aborting VNC connection."
+                 exit 1
+             fi
+        fi
+
+        echo -e "${YELLOW}🖥️  Initiating smart VNC connection...${NC}"
+        log "Starting VNC connection"
+
+        progress_bar 2 "Detecting server location"
+        check_duckdns
+        echo ""
+
+        if ping -c 1 -W 2 "$SERVER_LOCAL" >/dev/null 2>&1; then
+            echo -e "${GREEN}📍 Server found locally at $SERVER_LOCAL${NC}"
+            log "Connecting to VNC via local network"
+            vncviewer "$SERVER_LOCAL:5901"
+        else
+            echo -e "${BLUE}🌍 Connecting to VNC via DuckDNS: $SERVER_REMOTE${NC}"
+            log "Connecting to VNC via DuckDNS"
+            vncviewer "$SERVER_REMOTE:5901"
+        fi
+        ;;
+    "status")
+        show_banner
+        echo -e "${CYAN}📊 System Status:${NC}"
+        echo ""
+        echo -e "${YELLOW}🌐 Network Interface ($INTERFACE):${NC}"
+        iw dev "$INTERFACE" link 2>/dev/null || echo -e "  ${RED}Interface not connected${NC}"
+        echo ""
+        echo -e "${YELLOW}📡 IP Address:${NC}"
+        ip addr show "$INTERFACE" 2>/dev/null | grep 'inet ' | head -1 | awk '{print "  " $2}' || echo -e "  ${RED}No IP assigned${NC}"
+        echo ""
+        echo -e "${YELLOW}🔌 Proxy Settings:${NC}"
+        env | grep -i "proxy" | grep -v "no_proxy" || echo -e "  ${GREEN}No proxy settings active${NC}"
+        echo ""
+        echo -e "${YELLOW}🖥️  Server Status:${NC}"
+        if ping -c 1 -W 2 "$SERVER_LOCAL" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✅ Local server ($SERVER_LOCAL) is reachable${NC}"
+        else
+            echo -e "  ${YELLOW}⚠️ Local server ($SERVER_LOCAL) is unreachable${NC}"
+        fi
+        echo ""
+        check_duckdns
+        ;;
+    "edit-config")
+        check_root
+        nano /etc/jor-conn/config.conf
+        ;;
+    *)
+        show_banner
+        echo "Usage: jor_conn {connect <profile> | proxy {on|off} | remote-vnc | status | edit-config}"
+        ;;
+esac

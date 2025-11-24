@@ -1,0 +1,7 @@
+WPA_CONFIG_CONTENT="""
+network={
+    ssid=\\"DIRECT-TF-thuruht\\"
+    psk=\\"0thello6q\\"
+}
+"""
+APPLY_PROXY="true"

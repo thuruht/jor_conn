@@ -105,7 +105,13 @@ ENV_CONFIG
 
     # Sync time
     progress_bar 1 "Syncing time"
-    ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+    if command -v ntpdate &>/dev/null; then
+        ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+    elif command -v timedatectl &>/dev/null; then
+        timedatectl set-ntp true >/dev/null 2>&1 || true
+    else
+        log "Time sync skipped: no suitable tool found."
+    fi
 
     echo -e "${GREEN}✅ Successfully connected using profile '$profile_name'!${NC}"
     log "Connection successful for profile '$profile_name'."

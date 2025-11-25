@@ -2,21 +2,36 @@
 # Jor-Conn
 # A portable and configurable networking solution.
 
-# --- Load Configuration ---
-if [ -f "/etc/jor-conn/config.conf" ]; then
-    source "/etc/jor-conn/config.conf"
+# --- Load Path Detection ---
+# Detect if we are running installed or local
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/lib/shared.sh" ]; then
+    # Local Development / Standalone Mode
+    BASE_DIR="$SCRIPT_DIR"
+    LIB_FILE="$BASE_DIR/lib/shared.sh"
+    CONFIG_FILE="$BASE_DIR/config/jor.conf"
+    NETWORKS_DIR="$BASE_DIR/config/networks"
+elif [ -f "/usr/local/lib/jor-conn/shared.sh" ]; then
+    # Installed Mode (Legacy/System)
+    BASE_DIR="/usr/local/lib/jor-conn"
+    LIB_FILE="/usr/local/lib/jor-conn/shared.sh"
+    CONFIG_FILE="/etc/jor-conn/config.conf"
+    NETWORKS_DIR="/etc/jor-conn/networks"
 else
-    echo "CRITICAL: Configuration file /etc/jor-conn/config.conf not found."
+    echo "CRITICAL: Shared library not found in local ($SCRIPT_DIR/lib/shared.sh) or system paths."
+    exit 1
+fi
+
+# --- Load Configuration ---
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    echo "CRITICAL: Configuration file $CONFIG_FILE not found."
     exit 1
 fi
 
 # --- Load Shared Library ---
-if [ -f "/usr/local/lib/jor-conn/shared.sh" ]; then
-    source "/usr/local/lib/jor-conn/shared.sh"
-else
-    echo "CRITICAL: Shared library /usr/local/lib/jor-conn/shared.sh not found."
-    exit 1
-fi
+source "$LIB_FILE"
 
 # --- Function: Check Root Privileges ---
 check_root() {
@@ -30,7 +45,13 @@ check_root() {
 # --- Function: Connect to Network ---
 connect_network() {
     local profile_name=$1
-    local profile_path="/etc/jor-conn/networks/$profile_name"
+    # Security: Validate profile name to prevent path traversal
+    if [[ ! "$profile_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}Error: Invalid profile name. Only alphanumeric, dash, and underscore allowed.${NC}"
+        log "Error: Invalid profile name attempted: $profile_name"
+        exit 1
+    fi
+    local profile_path="$NETWORKS_DIR/$profile_name"
 
     if [ ! -f "$profile_path" ]; then
         echo -e "${RED}Error: Network profile '$profile_name' not found at $profile_path.${NC}"
@@ -42,7 +63,10 @@ connect_network() {
     echo -e "${YELLOW}🔌 Connecting using profile '$profile_name'...${NC}"
     log "Starting connection with profile: $profile_name"
 
-    # Source the network profile
+    # Security: Source config but warn if file ownership is unsafe
+    if [ "$(stat -c %u "$profile_path")" -ne 0 ] && [ "$(id -u)" -eq 0 ]; then
+        echo -e "${YELLOW}WARNING: Profile owned by non-root user. This is a security risk.${NC}"
+    fi
     source "$profile_path"
 
     # Stop existing connections
@@ -52,6 +76,15 @@ connect_network() {
 
     # Create temporary wpa_supplicant config
     local temp_wpa_config="/tmp/wpa_config_$$.conf"
+    # Security: Use envsubst if possible, otherwise be very careful with eval (legacy support)
+    # Ideally, we should remove eval completely. For now, assuming $WPA_CONFIG_CONTENT is trusted.
+    # Note: 'eval' is kept for heredoc variable expansion support in existing profiles,
+    # but strictly this should be migrated to `envsubst` for true security.
+    # Adding a safety check to ensure WPA_CONFIG_CONTENT doesn't contain command injection chars like backticks or $()
+    if [[ "$WPA_CONFIG_CONTENT" =~ \` || "$WPA_CONFIG_CONTENT" =~ \$\( ]]; then
+         echo -e "${RED}Security Error: Profile contains command substitution. Aborting.${NC}"
+         exit 1
+    fi
     echo -e "$(eval echo "$WPA_CONFIG_CONTENT")" > "$temp_wpa_config"
 
     # Start new connection
@@ -64,48 +97,23 @@ connect_network() {
     # Apply or remove proxy settings
     if [ "$APPLY_PROXY" = "true" ]; then
         progress_bar 1 "Applying proxy settings"
-        # System-wide environment variables
-        tee /etc/environment > /dev/null << ENV_CONFIG
-http_proxy=${PROXY_SERVER}
-https_proxy=${PROXY_SERVER}
-ftp_proxy=${PROXY_SERVER}
-no_proxy="localhost,127.0.0.1,192.168.0.0/16"
-ENV_CONFIG
-        # APT proxy configuration
-        mkdir -p /etc/apt/apt.conf.d
-        echo "Acquire::http::Proxy \"${PROXY_SERVER}\";" > /etc/apt/apt.conf.d/99proxy
-        log "Proxy settings applied for system and APT."
-
-        echo -e "${GREEN}✅ System-wide proxy has been enabled.${NC}"
-        echo -e "${YELLOW}Developer tools configuration:${NC}"
-        echo -e "To configure Git, run:"
-        echo -e "  ${CYAN}git config --global http.proxy \"${PROXY_SERVER}\"${NC}"
-        local proxy_host_port=$(echo "${PROXY_SERVER}" | sed -e 's#http[s]*://##')
-        echo -e "To tunnel SSH over the proxy, add this to your ${BOLD}~/.ssh/config${NC} file:"
-        echo -e "  ${CYAN}Host *${NC}"
-        echo -e "    ${CYAN}ProxyCommand /usr/bin/ncat --proxy-type http --proxy ${proxy_host_port} %h %p${NC}"
-
+        enable_proxy_system
+        log "Proxy settings applied for system, APT, Git, NPM, Wget, etc."
     else
         progress_bar 1 "Removing proxy settings"
-        # Clear system-wide environment variables
-        tee /etc/environment > /dev/null << ENV_CONFIG
-http_proxy=""
-https_proxy=""
-ftp_proxy=""
-no_proxy="*"
-ENV_CONFIG
-        # Remove APT proxy configuration
-        rm -f /etc/apt/apt.conf.d/99proxy
+        disable_proxy_system
         log "Proxy settings removed."
-        echo -e "${GREEN}✅ Proxy settings have been removed.${NC}"
-        echo -e "${YELLOW}To undo developer tool configuration:${NC}"
-        echo -e "  ${CYAN}git config --global --unset http.proxy${NC}"
-        echo -e "  ${CYAN}Remember to remove the ProxyCommand from your ~/.ssh/config${NC}"
     fi
 
     # Sync time
     progress_bar 1 "Syncing time"
-    ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+    if command -v ntpdate &>/dev/null; then
+        ntpdate -s pool.ntp.org >/dev/null 2>&1 || true
+    elif command -v timedatectl &>/dev/null; then
+        timedatectl set-ntp true >/dev/null 2>&1 || true
+    else
+        log "Time sync skipped: no suitable tool found."
+    fi
 
     echo -e "${GREEN}✅ Successfully connected using profile '$profile_name'!${NC}"
     log "Connection successful for profile '$profile_name'."
@@ -184,6 +192,27 @@ case "$1" in
         echo ""
         check_duckdns
         ;;
+    "inject-proxy")
+        check_root
+        if [ -z "$2" ]; then
+             echo -e "${RED}Error: Usage: sudo jor inject-proxy <chroot-path>${NC}"
+             exit 1
+        fi
+        inject_proxy_to_chroot "$2"
+        ;;
+    "proxy")
+        check_root
+        if [ "$2" == "on" ]; then
+            show_banner
+            enable_proxy_system
+        elif [ "$2" == "off" ]; then
+            show_banner
+            disable_proxy_system
+        else
+            echo "Usage: sudo jor proxy {on|off}"
+            exit 1
+        fi
+        ;;
     "edit-config")
         check_root
         echo "Opening /etc/jor-conn/config.conf with nano..."
@@ -199,26 +228,26 @@ case "$1" in
         echo -e "${YELLOW}📖 Jor-Conn Commands:${NC}"
         echo ""
         echo -e "${GREEN}Network Management:${NC}"
-        echo "  sudo jor_conn connect <profile> - Connect using a network profile from /etc/jor-conn/networks/"
+        echo "  sudo jor connect <profile>      - Connect using a network profile from $NETWORKS_DIR"
         echo ""
         echo -e "${BLUE}Remote Access:${NC}"
-        echo "  jor_conn remote-vnc            - VNC connection (local/remote auto-detect)"
+        echo "  jor remote-vnc                  - VNC connection (local/remote auto-detect)"
         echo ""
         echo -e "${CYAN}Monitoring & Config:${NC}"
-        echo "  jor_conn status                 - Complete system and network status"
-        echo "  jor_conn log                    - View the last 20 log entries"
-        echo "  sudo jor_conn edit-config       - Edit the main configuration file"
+        echo "  jor status                      - Complete system and network status"
+        echo "  jor log                         - View the last 20 log entries"
+        echo "  sudo jor edit-config            - Edit the main configuration file"
         echo ""
         echo -e "${PURPLE}Advanced:${NC}"
-        echo "  jor-duckdns-update              - Manually update your DuckDNS IP"
-        echo "  jor-troubleshoot                - Launch advanced diagnostics script"
+        echo "  sudo jor inject-proxy <dir>     - Inject proxy settings into a chroot/rootfs"
+        echo "  jor proxy {on|off}              - Manually toggle proxy settings"
         echo ""
         ;;
     *)
         show_banner
-        echo -e "${YELLOW}Usage: jor_conn {connect|remote-vnc|status|help}${NC}"
-        echo "For connecting, use: sudo jor_conn connect <profile_name>"
-        echo "For help, use: jor_conn help"
+        echo -e "${YELLOW}Usage: jor {connect|remote-vnc|status|inject-proxy|proxy|help}${NC}"
+        echo "For connecting, use: sudo jor connect <profile_name>"
+        echo "For help, use: jor help"
         echo ""
         ;;
 esac

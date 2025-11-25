@@ -1,8 +1,0 @@
-#!/bin/bash
-# Easter egg collection
-source /usr/local/lib/jor-conn/shared.sh
-show_banner
-echo -e "${PURPLE}🔮 Performing connection magic...${NC}"
-progress_bar 2 4 "Casting network spells"
-show_easter_egg
-echo -e "${GREEN}✨ Magic complete! Your connections are now enchanted!${NC}"

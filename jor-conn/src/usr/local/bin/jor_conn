@@ -64,43 +64,12 @@ connect_network() {
     # Apply or remove proxy settings
     if [ "$APPLY_PROXY" = "true" ]; then
         progress_bar 1 "Applying proxy settings"
-        # System-wide environment variables
-        tee /etc/environment > /dev/null << ENV_CONFIG
-http_proxy=${PROXY_SERVER}
-https_proxy=${PROXY_SERVER}
-ftp_proxy=${PROXY_SERVER}
-no_proxy="localhost,127.0.0.1,192.168.0.0/16"
-ENV_CONFIG
-        # APT proxy configuration
-        mkdir -p /etc/apt/apt.conf.d
-        echo "Acquire::http::Proxy \"${PROXY_SERVER}\";" > /etc/apt/apt.conf.d/99proxy
-        log "Proxy settings applied for system and APT."
-
-        echo -e "${GREEN}✅ System-wide proxy has been enabled.${NC}"
-        echo -e "${YELLOW}Developer tools configuration:${NC}"
-        echo -e "To configure Git, run:"
-        echo -e "  ${CYAN}git config --global http.proxy \"${PROXY_SERVER}\"${NC}"
-        local proxy_host_port=$(echo "${PROXY_SERVER}" | sed -e 's#http[s]*://##')
-        echo -e "To tunnel SSH over the proxy, add this to your ${BOLD}~/.ssh/config${NC} file:"
-        echo -e "  ${CYAN}Host *${NC}"
-        echo -e "    ${CYAN}ProxyCommand /usr/bin/ncat --proxy-type http --proxy ${proxy_host_port} %h %p${NC}"
-
+        enable_proxy_system
+        log "Proxy settings applied for system, APT, Git, NPM, Wget, etc."
     else
         progress_bar 1 "Removing proxy settings"
-        # Clear system-wide environment variables
-        tee /etc/environment > /dev/null << ENV_CONFIG
-http_proxy=""
-https_proxy=""
-ftp_proxy=""
-no_proxy="*"
-ENV_CONFIG
-        # Remove APT proxy configuration
-        rm -f /etc/apt/apt.conf.d/99proxy
+        disable_proxy_system
         log "Proxy settings removed."
-        echo -e "${GREEN}✅ Proxy settings have been removed.${NC}"
-        echo -e "${YELLOW}To undo developer tool configuration:${NC}"
-        echo -e "  ${CYAN}git config --global --unset http.proxy${NC}"
-        echo -e "  ${CYAN}Remember to remove the ProxyCommand from your ~/.ssh/config${NC}"
     fi
 
     # Sync time

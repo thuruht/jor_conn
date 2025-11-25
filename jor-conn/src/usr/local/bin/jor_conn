@@ -159,6 +159,14 @@ case "$1" in
         echo ""
         check_duckdns
         ;;
+    "inject-proxy")
+        check_root
+        if [ -z "$2" ]; then
+             echo -e "${RED}Error: Usage: sudo jor_conn inject-proxy <chroot-path>${NC}"
+             exit 1
+        fi
+        inject_proxy_to_chroot "$2"
+        ;;
     "edit-config")
         check_root
         echo "Opening /etc/jor-conn/config.conf with nano..."
@@ -185,13 +193,14 @@ case "$1" in
         echo "  sudo jor_conn edit-config       - Edit the main configuration file"
         echo ""
         echo -e "${PURPLE}Advanced:${NC}"
+        echo "  sudo jor_conn inject-proxy <dir>- Inject proxy settings into a chroot/rootfs"
         echo "  jor-duckdns-update              - Manually update your DuckDNS IP"
         echo "  jor-troubleshoot                - Launch advanced diagnostics script"
         echo ""
         ;;
     *)
         show_banner
-        echo -e "${YELLOW}Usage: jor_conn {connect|remote-vnc|status|help}${NC}"
+        echo -e "${YELLOW}Usage: jor_conn {connect|remote-vnc|status|inject-proxy|help}${NC}"
         echo "For connecting, use: sudo jor_conn connect <profile_name>"
         echo "For help, use: jor_conn help"
         echo ""

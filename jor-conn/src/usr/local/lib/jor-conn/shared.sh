@@ -92,6 +92,7 @@ export http_proxy="${PROXY_URL}"
 export https_proxy="${PROXY_URL}"
 export ftp_proxy="${PROXY_URL}"
 export no_proxy="localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8"
+export MAVEN_OPTS="-Dhttp.proxyHost=$(echo $PROXY_URL | sed 's|^http://||' | cut -d: -f1) -Dhttp.proxyPort=$(echo $PROXY_URL | sed 's|^http://||' | cut -d: -f2) -Dhttps.proxyHost=$(echo $PROXY_URL | sed 's|^http://||' | cut -d: -f1) -Dhttps.proxyPort=$(echo $PROXY_URL | sed 's|^http://||' | cut -d: -f2)"
 # JOR_CONN_PROXY_END
 BASH_EOF
     fi
@@ -182,7 +183,51 @@ WGET_EOF
     update_vscode_json "$REAL_HOME/.config/Code/User/settings.json"
     update_vscode_json "$REAL_HOME/.config/VSCodium/User/settings.json"
 
-    # 8. SSH Instructions
+    # 8. Docker (Daemon + Client)
+    if command -v docker &>/dev/null; then
+        # Daemon Config (Systemd)
+        if [ -d "/etc/systemd/system" ]; then
+            mkdir -p /etc/systemd/system/docker.service.d
+            cat > /etc/systemd/system/docker.service.d/http-proxy.conf <<DOCKER_EOF
+[Service]
+Environment="HTTP_PROXY=${PROXY_URL}"
+Environment="HTTPS_PROXY=${PROXY_URL}"
+Environment="NO_PROXY=localhost,127.0.0.1,::1,${DUCKDNS_DOMAIN}.duckdns.org"
+DOCKER_EOF
+            systemctl daemon-reload && systemctl restart docker
+            echo -e "${GREEN}✅ Docker Daemon Proxy Configured.${NC}"
+        fi
+
+        # Client Config (~/.docker/config.json)
+        mkdir -p "$REAL_HOME/.docker"
+        local DOCKER_CONF="$REAL_HOME/.docker/config.json"
+        if [ ! -f "$DOCKER_CONF" ]; then echo "{}" > "$DOCKER_CONF"; chown "$REAL_USER":"$REAL_USER" "$DOCKER_CONF"; fi
+
+        # Use simple sed injection if jq is missing, else jq
+        if command -v jq &>/dev/null; then
+            tmp=$(mktemp)
+            jq --arg proxy "$PROXY_URL" '.proxies.default = {"httpProxy": $proxy, "httpsProxy": $proxy, "noProxy": "localhost,127.0.0.1"}' "$DOCKER_CONF" > "$tmp" && mv "$tmp" "$DOCKER_CONF"
+            rm -f "$tmp"
+            chown "$REAL_USER":"$REAL_USER" "$DOCKER_CONF"
+        fi
+        echo -e "${GREEN}✅ Docker Client Proxy Configured.${NC}"
+    fi
+
+    # 9. GNOME Desktop (gsettings)
+    if command -v gsettings &>/dev/null; then
+         # We need to run dbus-launch to access dconf if run from sudo
+         # But usually 'sudo -u user gsettings' works if user is logged in
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy mode 'manual' 2>/dev/null
+         local HOST=$(echo "$PROXY_URL" | sed -e 's|^[^/]*//||' -e 's|:.*$||')
+         local PORT=$(echo "$PROXY_URL" | sed -e 's|^.*:||' -e 's|/.*$||')
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy.http host "$HOST" 2>/dev/null
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy.http port "$PORT" 2>/dev/null
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy.https host "$HOST" 2>/dev/null
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy.https port "$PORT" 2>/dev/null
+         echo -e "${GREEN}✅ GNOME Desktop Proxy Configured.${NC}"
+    fi
+
+    # 10. SSH Instructions
     local proxy_host_port=$(echo "${PROXY_URL}" | sed -e 's#http[s]*://##')
     echo -e "${YELLOW}Developer tools configuration:${NC}"
     echo -e "To tunnel SSH over the proxy, add this to your ${BOLD}~/.ssh/config${NC} file:"
@@ -190,6 +235,47 @@ WGET_EOF
     echo -e "    ${CYAN}ProxyCommand /usr/bin/ncat --proxy-type http --proxy ${proxy_host_port} %h %p${NC}"
 
     echo -e "${GREEN}✅ Proxy Enabled System-Wide.${NC}"
+}
+
+inject_proxy_to_chroot() {
+    local TARGET_ROOT="$1"
+    local PROXY_URL="$PROXY_SERVER"
+
+    if [ -z "$TARGET_ROOT" ] || [ ! -d "$TARGET_ROOT" ]; then
+        echo -e "${RED}Error: Invalid target chroot directory: $TARGET_ROOT${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}💉 Injecting proxy settings into chroot: $TARGET_ROOT${NC}"
+
+    # 1. Inject /etc/environment
+    local TARGET_ENV="$TARGET_ROOT/etc/environment"
+    if [ -f "$TARGET_ENV" ]; then
+        # Check if already present to avoid duplication
+        if ! grep -q "http_proxy" "$TARGET_ENV"; then
+            cat >> "$TARGET_ENV" <<ENV_EOF
+http_proxy="${PROXY_URL}"
+https_proxy="${PROXY_URL}"
+ftp_proxy="${PROXY_URL}"
+no_proxy="localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,${DUCKDNS_DOMAIN}.duckdns.org"
+ENV_EOF
+            echo -e "  ${GREEN}✓ Environment variables injected${NC}"
+        else
+             echo -e "  ${YELLOW}⚠ Environment variables already present in target${NC}"
+        fi
+    fi
+
+    # 2. Inject APT Config
+    local TARGET_APT_DIR="$TARGET_ROOT/etc/apt/apt.conf.d"
+    if [ -d "$TARGET_APT_DIR" ]; then
+        echo "Acquire::http::Proxy \"${PROXY_URL}/\";" > "$TARGET_APT_DIR/99jorproxy"
+        echo "Acquire::https::Proxy \"${PROXY_URL}/\";" >> "$TARGET_APT_DIR/99jorproxy"
+        echo -e "  ${GREEN}✓ APT configuration injected${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Target has no /etc/apt/apt.conf.d, skipping APT config${NC}"
+    fi
+
+    echo -e "${GREEN}✅ Injection Complete.${NC}"
 }
 
 disable_proxy_system() {
@@ -246,6 +332,24 @@ ENV_EOF
     }
     clear_vscode_json "$REAL_HOME/.config/Code/User/settings.json"
     clear_vscode_json "$REAL_HOME/.config/VSCodium/User/settings.json"
+
+    # Clear Docker
+    if [ -f "/etc/systemd/system/docker.service.d/http-proxy.conf" ]; then
+        rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
+        systemctl daemon-reload && systemctl restart docker
+    fi
+    local DOCKER_CONF="$REAL_HOME/.docker/config.json"
+    if [ -f "$DOCKER_CONF" ] && command -v jq &>/dev/null; then
+        tmp=$(mktemp)
+        jq 'del(.proxies)' "$DOCKER_CONF" > "$tmp" && mv "$tmp" "$DOCKER_CONF"
+        rm -f "$tmp"
+        chown "$REAL_USER":"$REAL_USER" "$DOCKER_CONF"
+    fi
+
+    # Clear GNOME
+    if command -v gsettings &>/dev/null; then
+         sudo -u "$REAL_USER" dbus-launch gsettings set org.gnome.system.proxy mode 'none' 2>/dev/null
+    fi
 
     echo -e "${GREEN}✅ Proxy Disabled.${NC}"
 }
